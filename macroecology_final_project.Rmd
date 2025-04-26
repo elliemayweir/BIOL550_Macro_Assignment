@@ -1,0 +1,1191 @@
+---
+title: "Reptiles of the reef: Assessing sea snake distribution patterns around Australia"
+author: "Ellie Weir"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# for a clean work space, removes all variables, data frames, and functions from the environment
+rm(list = ls()) 
+
+# theme_emw (for consistent ggplot formatting)
+theme_emw <- function () {
+  theme_classic(base_size = 12) +
+    theme(
+      panel.border = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(colour = "black"),
+      axis.title = element_text(size = 16, face = "bold"),
+      axis.text = element_text(size = 16, face = "plain"),
+      legend.text = element_text(size = 16, face = "plain"),
+      legend.title = element_text(size = 16, face = "bold"),
+      axis.text.x = element_text(angle = 50, hjust=1),
+      plot.title = element_text(face = "bold", size = 18))
+}
+
+```
+
+## Background 
+
+Temperature is a major determinant of species distributions affecting metabolism, growth, and reproductive success, particularly in ectothermic organisms (Shine, 2005; Tittensor et al., 2010). While terrestrial reptiles can behaviourally regulate their body temperatures by moving between areas of sun and shade, marine reptiles are immersed in their environment and are therefore largely constrained by the temperature of surrounding waters (Favilla & Costa, 2020). Sea surface temperature (SST) thus serves as an important thermal habitat for marine reptiles, providing a warmer surface layer that supports thermoregulation and essential biological processes (Hamann et al., 2007). Among marine reptiles, sea snakes (Hydrophiinae) are tightly surface-associated and depend on warm surface waters for foraging, reproduction, and thermoregulation (Heatwole et al., 1975). Given their shallow habitat use (<50 m) and air-breathing physiology (Heatwole et al., 1975), SST, rather than deeper water temperatures, is thought to exert the strongest influence on their ecology and biogeography (Heatwole et al., 2012). 
+
+While previous research has shown that thermal gradients can influence the latitudinal limits of marine ectotherms (Stuart-Smith et al., 2017), the specific role of SST in shaping marine reptile and sea snake distributions across large spatial scales is limited (Heatwole et al., 2012). Better understanding the thermal requirements of sea snakes is necessary for assessing their distribution, status, and their vulnerability to climate change (Hamann et al., 2007; Udyawer et al., 2018).
+
+## Objectives
+
+The primary objective of this research is to investigate the role of SST in shaping patterns of sea snake occurrence and abundance in Australian waters. Specifically, I aim to identify realized thermal thresholds beyond which sea snake abundance declines. Given their shallow habitat use and proposed thermal tolerance range (20–36°C; Dunson & Ehlert, 1971), I predict that sea snake abundance will decrease along a gradient of cooler SSTs toward the southern margins of their known geographic range. Abundance is expected to be lowest at sites with the lowest long-term mean SSTs and the coldest winter SSTs.
+
+## Data
+
+To address my main objective, I will be using a subset of Reef Life Survey (RLS) data collected around Australia between 2010-2024 (https://reeflifesurvey.com/survey-data/). Information from 3 different survey methods (m0: global off-transect species observations; m1: global reef fish abundance and biomass; and m2: global cryptobenthic fish abundance) will be aggregated to ensure an adequate number of sea snake observations are included in analyses. SST data layers will be retrieved from NOAA Coral Reef Watch (Version 3.1; https://coralreefwatch.noaa.gov/product/5km/index.php), which provides daily global coverage with high spatial resolution (5 km grid) that is well suited to analyses of long term and seasonal mean SSTs. 
+
+## Analysis
+
+Generalized additive models (GAMs) will be used to model how overall mean SST, as well as winter SST, influences sea snake abundance across sites. GAMs were selected because they present a flexible modelling approach (Pedersen et al., 2019), allowing both non-normal response distributions (e.g., binomial), and for non-linear relationships between predictor (e.g., SST, latitude) and response variables (sea snake absence) without expending statistical power. 
+
+```{r required packages, message=FALSE}
+
+# load all required packages
+
+# data cleaning
+library(dplyr) # data wrangling and filtering
+library(tidyr) # reshaping data
+library(lubridate) # for reconfiguring dates
+library(stringr)
+
+# visualizations
+library(ggplot2) # plotting
+library(viridis) # colour palette
+
+# environmental data
+library(biooracler) # for importing bio-oracle layers
+library(rerddap) # for importing coral watch layers
+
+# spatial
+library(maps) # base maps
+library(sf) # handles spatial features (e.g., polygons)
+library(terra) # handles rasters, better for .nc files
+library(raster) # handles rasters
+library(metR) # draws contour lines on heatmaps
+library(rnaturalearth) # base maps
+library(rnaturalearthdata) # base maps
+
+# modelling
+library(mgcv) # for GAM models
+
+```
+
+## Overview of analysis plan: 
+
+1. Reef Life Survey (RLS) data import and cleaning
+2. Preliminary visualizations of RLS data 
+3. Integration and visualization of sea surface temperature (NOAA Coral Reef Watch)
+4. Extraction and visualizations of SST for RLS survey points 
+5. Statistical modelling 
+
+## Analysis Part I
+### Reef Life Survey (RLS) data import and cleaning 
+
+Reef Life Survey (RLS) data was downloaded from the Australian Ocean Data Network portal (https://portal.aodn.org.au/search). A subset was created by:
+
+1. Using keyword search "RLS" 
+2. Selecting survey type
+
+    * Global off-transect species observations (m0)
+    * Global reef fish abundance and biomass (m1)
+    * Global cryptobenthic fish abundance (m2)
+    
+3. Inputting spatial bounding box "N 90, E 180, S -90, W -180"
+4. Applying class filter "Reptilia", and country filter "Australia"
+5. Repeating for each survey type, and downloading
+6. Survey types combined below into one dataframe "RLS"
+
+Once downloaded, further filter "RLS_reptiles" data frame to only include true sea snakes (Hydrophiinae). This removes observations of sea turtles, as well as sea kraits. Sea kraits are a subfamily of sea snakes (Lacticaudinae) that are oviparous and  must return to land to lay eggs. Because of this difference in reproductive strategy, they are excluded from analyses as their distribution is influenced by terrestrial habitat requirements, and not oceanic ones alone. Moreover, there were only two sea kraits in the dataset, and so they were additionally excluded for their low sample size. 
+
+```{r load RLS data, results = "hide"}
+
+## required packages
+# library(dplyr)
+# library(lubridate)
+
+# NOTE: combining data from 3 RLS survey methods (m0, m1, m2) to increase sample size 
+# methods have different survey protocols (e.g., block dimensions)
+# an analysis in Part V (Statistical Modelling) will evaluate whether combining these methods impacts abundance estimates prior to proceeding with the main SST models
+m0 <- read.csv("rls_data/RLS_m0_off_transect.csv")
+m1 <- read.csv("rls_data/RLS_m1_reef_fish.csv")
+m2 <- read.csv("rls_data/RLS_m2_cryptobenthic.csv")
+  
+# vertically bind 3 dataframes above into one dataframe that includes all reptiles observations across the 3 different survey types
+# survey type is noted in column 1 (FID), as well as column 19 (method)
+RLS_reptiles <- rbind(m0, m1, m2) %>%
+  mutate(year = year(ymd(survey_date)), # create column for year
+      month = month(ymd(survey_date))) # create column for month
+
+# inspect data
+colnames(RLS_reptiles) # preview column names
+str(RLS_reptiles) # preview structure of data
+#View(RLS_reptiles)
+
+# RLS dataset has column for family that lists both Elapidae and Hydrophiidae
+# sea kraits (and some sea snakes) are both included under Elapidae
+# because family is the lowest level of classification given prior to full species_name (genus not included as a column), either need to split species_name into genus and species, or just exclude sea kraits by species_name
+# since there is only one species of sea krait (genus Laticauda) in the dataset, opted to eliminate them from the dataset by filtering out using unique species_name 
+unique_species <- unique(RLS_reptiles$species_name)
+print(unique_species) # only 1 species to exlude: Laticauda colubrina
+
+# filter RLS dataset to only remove sea turtles and only include true sea snakes
+RLS_snakes <- RLS_reptiles %>% 
+  filter(order == "Squamata") %>% # removes turtles
+  dplyr::filter(species_name != "Laticauda colubrina") # removes sea kraits 
+
+# write .csv file to working directory with sea snake observations from the 3 different survey types
+write.csv(RLS_snakes, "rls_data/RLS_snakes.csv", row.names = FALSE)
+
+# check to see how many sites are included in the snake dataset, and how many dives have been conducted overall
+n_distinct(RLS_snakes$site_code)
+n_distinct(RLS_snakes$survey_id)
+RLS_snakes %>% count(site_code, sort = TRUE)
+
+```
+
+## Analysis Part II
+### Preliminary spatial visualizations of RLS data 
+
+Currently, the "RLS_snakes" data frame is set up so that column "total" includes the total number of observations for particular size class on a given survey. This means that to get species abundances, or total abundance per survey, the sum of column "total" needs to be calculated. Once this has been done, some preliminary plots can be created to explore broad patterns in sea snake abundance and distribution. 
+
+Note: this section does not account for differences in survey type. 
+
+```{r exploration of sea snake species abundances by ecoregion (plots), fig.width=12, fig.height=8}
+
+## required packaged
+# library(dplyr)
+# library(ggplot2)
+# library(viridis)
+
+# get overall abundance of sea snake species in Australia (across all surveys, by species)
+# olive sea snake (Aipysurus laevis) most abundant, with comparatively few observations of other species
+# can use same code as above (dplyr group and summarize) to give abundance for area, ecoregion, realm, site etc.
+abund_species_aus <- RLS_snakes %>%
+  group_by(species_name) %>%
+  summarise(abundance = sum(total), .groups = "drop")
+
+# # create bar plot of species abundance
+# ggplot(abund_species_aus, aes(x = reorder(species_name, -abundance), y = abundance)) +
+#   geom_bar(stat = "identity") +
+#   theme_emw() +
+#   scale_fill_viridis_d() +
+#   labs(title = "Abundance of sea snake species in Australia",
+#        x = "Species",
+#        y = "Abundance")+
+#   theme(axis.text.x = element_text(size = 16, face = "italic")) # modify theme to italicize species names 
+
+# get snake species abundance in Australia by ecoregion
+# Coral Sea (Queensland), Exmouth to Broome (Western Australia), and GBR (Queensland) have most observations
+abund_ecoregion_aus <- RLS_snakes %>%
+  group_by(ecoregion, species_name) %>%
+  summarise(abundance = sum(total), .groups = "drop")
+
+# # create bar plot to visualize areas with highest sea snake abundance
+# ggplot(abund_ecoregion_aus, aes(x = reorder(ecoregion, -abundance), y = abundance)) +
+#   geom_bar(stat = "identity") +
+#   theme_emw() +
+#   scale_fill_viridis_d() +
+#   labs(title = "Abundance of sea snakes in Australia by ecoregion",
+#        x = "Ecoregion",
+#        y = "Abundance")+
+#   theme(axis.text.x = element_text(size = 16, face = "italic")) # modify theme to italicize species names 
+
+# combine two previous bar plots (commented out) into one visualization: stacked bar plot
+# the decision to group by the spatial scale of ecoregion for these next two plots, rather than realm or location, was based on marine ecoregions being distinct from nearby systems in terms of species composition, oceanographic, and topographic features (Spalding et al., 2007). I would therefore expect the species assemblages to somewhat differ from one another between ecoregions (i.e., some ecoregions might have endemic species that are not found elsewhere). These differences in composition might not as be apparent at the coarser resolution of realms (or area), or finer resolution of site. 
+ggplot(abund_ecoregion_aus, aes(x = reorder(ecoregion, -abundance), y = abundance, fill = species_name)) +
+  geom_bar(stat = "identity") +
+  theme_emw() +
+  scale_fill_viridis_d(option = "viridis") +
+  labs(title = "Sea snake abundance in ecoregions around Australia",
+       x = "Ecoregion",
+       y = "Total Abundance",
+       fill = "Species") +
+  theme(legend.text = element_text(face = "italic"))
+
+# create a heat plot to help visualize species presence/absence and abundance across ecoregions
+ggplot(abund_ecoregion_aus, aes(x = species_name, y = ecoregion, fill = abundance)) +
+  geom_tile() +
+  theme_emw() +
+  scale_fill_viridis_c(option = "inferno") +
+  labs(title = "Sea snake species presence and abundance by ecoregion",
+       x = "Species",
+       y = "Ecoregion",
+       fill = "Abundance") +
+  theme(axis.text.x = element_text(face = "italic"))
+
+```
+
+From the preliminary plots above, it is apparent that some areas such as Queensland (Coral Sea, Great Barrier Reef) and Western Australia (Exmouth to Broome) have higher sea snake abundances compared to other regions. It could be that higher abundances in this area are a result of more surveys being conducted in these areas. Similarly, some years and sites may have also had greater survey effort than others. 
+
+The following code chunk normalizes dive effort by region and year to investigate whether some ecoregions have higher abundances than others, or whether the pattern from the previous section is more so driven by survey effort. "Survey effort" is being used here to refer to the number of dives conducted in certain areas or years, rather than the influence of survey method.
+
+Because of unequal effort across regions, sites, and years, another option could be to use presence/absence. This would also allow for the comparison of SST between sites where sea snakes were observed, and sites where they were not (within the broader RLS dataset for Australia). However, because the RLS data does not represent true absence data, it is not possible to establish with certainty that their absence from certain sites is because they are not present at that location, or because they were not detected during the survey. For this reason, my analyses will focus solely on abundance. 
+
+```{r exploration of dive effort by ecoregion and year (plots), fig.width=12, fig.height=8}
+
+## required packaged
+# library(dplyr)
+# library(ggplot2)
+# library(viridis)
+
+# calculate number of dives in each year
+# dives span 2010-2024
+# 2010 and 2012 have fewest dives
+# 2013 and 2019 dive blitz years (>50 dives)
+# most years have ~20 dives 
+dive_counts_year <- RLS_snakes %>%
+  group_by(year, ecoregion) %>%
+  summarise(total_dives = n_distinct(survey_id), 
+            total_abund = sum(total), .groups = "drop") %>%
+  mutate(abundance_per_dive = total_abund / total_dives) %>%
+  arrange(desc(year))
+
+# calculate the number of dives at each site (incl. year and method)
+# some sites have multiple visits (using same survey method) within the same year, others only visited once
+# dive_counts_site <- RLS_snakes %>%
+#   group_by(site_code, year, method) %>%
+#   summarise(total_dives = n_distinct(survey_id), .groups = "drop") %>%
+#   arrange(desc(total_dives)) 
+
+# calculate the number of dives in each ecoregion
+dive_counts_ecoregion <- RLS_snakes %>%
+  group_by(ecoregion) %>%
+  summarise(total_dives = n_distinct(survey_id), .groups = "drop") %>%
+  arrange(desc(total_dives)) %>%
+  print()
+
+# calculate abundance per dive in each ecoregion
+ecoregion_abund_per_dive <- abund_ecoregion_aus %>%
+  left_join(dive_counts_ecoregion, by = "ecoregion") %>%
+  mutate(abundance_per_dive = abundance / total_dives)
+
+# re-make species abundance stacked plot, this time accounting for number of dives in each region
+ggplot(ecoregion_abund_per_dive, aes(x = reorder(ecoregion, -abundance), y = abundance_per_dive, fill = species_name)) +
+  geom_bar(stat = "identity") +
+  theme_emw() +
+  scale_fill_viridis_d(option = "viridis") +
+  labs(title = "Sea snake abundance across ecoregions normalized by dive effort",
+       x = "Ecoregion",
+       y = "Abundance per Dive",
+       fill = "Species") +
+  theme(legend.text = element_text(face = "italic"))
+
+# re-make species abundance heat plot, this time accounting for number of dives in each region
+ggplot(ecoregion_abund_per_dive, aes(x = species_name, y = ecoregion, fill = abundance_per_dive)) +
+  geom_tile() +
+  theme_emw()+
+  scale_fill_viridis_c(option = "inferno") +
+  labs(title = "Sea snake abundance across ecoregions normalized by dive effort",
+       x = "Species",
+       y = "Ecoregion", 
+       fill = "Abundance per Dive") +
+  theme(axis.text.x = element_text(face = "italic"))
+
+```
+
+Preliminary plots are helpful in understanding general patterns of abundance. However, to better visualize spatial patterns in sea snake abundance, I will next overlay observations on a map surface. As a first step towards this, nI will create a base map of Australia and surrounding ocean.  
+
+```{r create base map of australia (maps), results='hide', fig.show='hide'}
+
+## required packages
+# library(dplyr)
+# library(rnaturalearth)
+# library(rnaturalearthdata)
+# library(sf)
+# library(ggplot2)
+
+# take world map and filter for Australia
+# include Papua New Guinea and Indonesia to better visualize spatial context for some of the observations in the North of Australia
+world <- ne_countries(scale = "large", returnclass = "sf") # get world map as a spatial object 
+australia <- world %>% # filter for Australia 
+  filter(admin %in% c("Australia", "Indonesia", "Papua New Guinea"))
+
+ggplot() +
+  geom_sf(data = australia, fill = "gray95", color = "black", size = 0.3) +
+  coord_sf(xlim = c(100, 165), ylim = c(-45, -5), expand = FALSE) + # constrain lat and long to area of interest
+  theme_emw() +
+  labs(title = "Map of Australia",
+       x = "Longitude", y = "Latitude")
+
+
+```
+
+Now that base map has been generated, it is possible to  plot sea snake observations using point size to show species abundances at each dive site. I will continue to use species abundances normalized by the number of dives at each site for this section. 
+
+```{r spatial patterns of sea snake abundance (maps), fig.width=12, fig.height=8}
+
+## required packaged
+# library(dplyr)
+# library(sf)
+# library(ggplot2)
+# library(viridis)
+
+# create a map where abundances are normalized according to the number of dives conducted at that site 
+# first count number of dives per site
+dive_counts_site <- RLS_snakes %>%
+  count(site_code, name = "n_dives")
+
+# calculate normalized snake abundance in Australia by site_code, keeping latitude, longitude and species name
+abund_per_dive <- RLS_snakes %>%
+  group_by(site_code, latitude, longitude, species_name) %>%
+  summarise(abundance = sum(total), .groups = "drop") %>%
+  left_join(dive_counts_site, by = "site_code") %>%
+  mutate(norm_abundance = abundance / n_dives)
+
+# plot normalized abundance
+# in this version of the map, I have included a horizontal line at 25°S - which seems to be a southern range limit for sea snakes
+# similarly to the plots produced earlier, abundances are relatively similar across sites and regions when the number of surveys is taken into account
+ggplot() +
+  geom_sf(data = australia, fill = "gray95", color = "black", size = 0.3) + # base map
+  coord_sf(xlim = c(100, 165), ylim = c(-45, -5), expand = FALSE) + # constrain lat and long to area of interest
+  geom_point(data = abund_per_dive,
+             aes(x = longitude, y = latitude, color = species_name, size = norm_abundance),
+             position = position_jitter(width = 0.2, height = 0.2), # shifts overlapping points slightly 
+             alpha = 0.7) + # increases transparency of points so that I can see overlapping species
+  geom_hline(yintercept = -25, color = "darkred", linetype = "dashed", linewidth = 0.8) + # insert horizontal line
+  scale_size_continuous(breaks = c(1, 1.5, 2, 2.5), name = "Abundance per dive") +
+  theme_emw() +
+  scale_color_viridis_d(option = "turbo") +
+  labs(title = "Normalized sea snake abundance by species and dive site",
+       x = "Longitude", y = "Latitude",
+       color = "Species") +
+  theme(legend.text = element_text(face = "italic"))
+
+# it is difficult to discern which rarer species are present in each area due to overlapping points, but this map helps give a sense of dominant species overall 
+# clustering of points (e.g., in the coral sea) indicates some potential hotspots
+# hotspots could either represent areas where lots of dives are conducted, or areas which are more suitable for sea snakes (by temperature or habitat)
+
+```
+
+From the maps above, it is apparent that sea snakes are absent at lower latitudes (below -25° to -30°S); however, they seem to have similar abundances across sites and latitudes north of -25°S. Next I will start to coarsely investigate the relationship between sea snake abundance and latitude. I first look at raw abundances (not normalized by number of dives), and then compare to normalized abundances by latitude band. 
+
+```{r exloraration of sea snake abundance and latitude (plots), fig.width=12, fig.height=8}
+
+## required packaged
+# library(dplyr)
+# library(ggplot2)
+# library(viridis)
+
+# want to coarsely look at the relationship between sea snake abundance and latitude bands
+# first need to bin the latitudes included in the dataset 
+latitude_RLS_snakes<- RLS_snakes %>%
+  mutate(lat_band = cut(latitude, breaks = seq(-50, 0, by = 1)))  # binned by 1°
+
+# calculate snake abundance in each latitude bin
+abund_by_latitude <- latitude_RLS_snakes %>%
+  group_by(lat_band) %>%
+  summarise(abundance = sum(total))
+ 
+# note: originally made a histogram (exluded) which was missing bands 16 and 17 missing (no observations in these latitude bands), wanted to include missing bins to highlight lack of observations in these bands
+# issue of missing bins was troubleshooted using answers generated by ChatGPT (OpenAI, 2025), which generated code on the next 4 lines
+
+# create list of lat bands to make sure all latitude bands are included
+abund_by_latitude <- tibble(
+  lat_band = cut(seq(-25.9, -9.1, by = 1), breaks = seq(-50, 0, by = 1))) %>% # bin latitude values
+  left_join(abund_by_latitude, by = "lat_band") %>% # join with abundances, fills NA in empty abundance cells for now
+  mutate(abundance = ifelse(is.na(abundance), 0, abundance)) # fills 0 if no abundance for that band
+
+# plot histogram with all bands included
+ggplot(abund_by_latitude, aes(x = lat_band, y = abundance)) +
+  geom_col(fill = "#3B528B") +
+  theme_emw()+
+  labs(x = "Latitude Band (°S)", 
+       y = "Total Abundance", 
+       title = "Sea snake abundance by latitude band") 
+
+# does not appear to be a linear relationship between latitude and abundance
+# suggests that factors than latitude are influencing distribution 
+# considering survey effort again, there are some areas that are more intensely surveyed and so abundance is influenced by survey effort alongside environmental variables
+
+# calculate the number of dives in each latitude band
+dives_by_latitude <- latitude_RLS_snakes %>%
+  group_by(lat_band) %>%
+  summarise(total_dives = n_distinct(survey_id))
+
+# combine abundances and survey effort (number of dives) for latitude bands
+abund_by_latitude <- dives_by_latitude %>%
+  left_join(abund_by_latitude, by = "lat_band") %>%
+  mutate(abundance_per_dive = abundance / total_dives) %>%
+  mutate(abundance_per_dive = ifelse(is.na(abundance_per_dive), 0, abundance_per_dive))
+
+# create histogram as above, but this time standardized for number of dives 
+ggplot(abund_by_latitude, aes(x = lat_band, y = abundance_per_dive)) +
+  geom_col(fill = "#3B528B") +
+  theme_emw() +
+  labs(x = "Latitude Band (°S)",
+       y = "Abundance per Dive",
+       title = "Sea snake abundance by standardized by latitude band")
+
+# low abundance seen below 25°S and no observations between 16-17°S
+# gap in observations between 16-17°S maybe due to fewer dives conducted within this latitude band, or lack of suitable habitat/conditions
+    # looking at all RLS dive sites however, it seems that dives are being conducted in this area - just no snakes detected
+    # (https://reeflifesurvey.com/frequency-explorer/)
+    # so interestingly, absence here maybe more so related to unsuitable habitat/conditions
+# drop off in abundance beyond 25°S likely to be a southern distribution limit
+
+```
+
+From data exploration of site abundances and abundances by latitude (both raw abundances and standardized by number of dives), it seems that there is limited variation in sea snake abundances within the latitudes evaluated herein. This lack of gradient in abundance between latitudes and sites could make it challenging to discern whether SST is driving differences in abundances between areas. 
+
+## Analysis Part III
+### Integration and visualization of sea surface temperature (from NOAA Coral Reef Watch)
+
+_Note: I deviated here from my original proposal, where I was going to use Bio-ORACLE data layers. I misunderstood the structure of the Bio-ORACLE data layers and previously thought it was possible to extract monthly layers (monthly average over the decade). I since learned that this is not the case for the SST data layer, and instead opted to use Coral Reef Watch data layers for my analyses. Code to import Bio-ORACLE layers is available in Appendix I._ 
+
+The Bio-ORACLE mean SST temperature dataset has many strengths, including high spatial resolution (9km); however, it is limited by its coarse temporal resolution to address the objectives herein. The Bio-ORACLE baseline SST layers are based decadal means (2000-2009, and 2010-2019), and therefore it is not possible to analyze seasonal differences in SST (https://bio-oracle.org/documentation.php). Because of this limitation, Coral Reef Watch (CRW) was used instead since the CRW CoralTemp product (v3.1) includes daily global SST with high spatial resolution (5km) that is better suited to analyses of seasonal differences in SST. 
+
+CRW CoralTemp data available from: https://coralreefwatch.noaa.gov/product/5km/index.php) 
+
+Code used in chunk below is borrowed and modified from Dominique Maucieri (personal correspondence, 2025). 
+
+_original code_ 
+xx_sst <- griddap(temp_crw, 
+                 latitude = c(temp_surveys_AUS$latitude[i],
+                              temp_surveys_AUS$latitude[i]), 
+                 longitude = c(temp_surveys_AUS$longitude[i],
+                               temp_surveys_AUS$longitude[i]), 
+                 time = c(as.character(paste(survey_date_365,
+                                             "T00:00:00Z", sep = "")),
+                          as.character(paste(temp_surveys_AUS$survey_date[i],
+                                             "T00:00:00Z", sep = ""))), 
+                 fields = 'CRW_SST', fmt = "csv")
+
+
+```{r use "rerddap" to download Coral Reef Watch (CRW) data layers, fig.show='hide'}
+
+## required packages 
+# library(rerddap)
+# library(terra) # originally used library(raster) to rasterize below (as I did with Bio-Oracle) but struggled with CRW file size, so opted for newer alternative package "terra"
+
+## uses "rerddap" package to search for coral watch data on ERDDAP servers (search for "coral"), only need to do this once to figure out what data layers are needed 
+# ed_search("coral") 
+## from this search, data layer of interest is: (NOAA_NHW_monthly)
+
+# # get information for data layer (e.g., temporal and spatial coverage, units, variables)
+# crw_sst_monthly <- info("NOAA_DHW_monthly")
+# crw_sst_monthly # want to download "sea_surface_temperature" variable
+# 
+# # create a subset of the data 
+# # pull out monthly sea surface temperature for 2005-2024 (restricted by lat/long)
+#     # AUS lat(-45, -5), long (100, 165) 
+# # request NetCDF (.nc) format, download, and store as temporary file
+# crw_sst_monthly_nc <- griddap(crw_sst_monthly,
+#                   latitude = c(-45, -5),
+#                   longitude = c(105, 165),
+#                   time = c("2005-01-01T00:00:00Z", "2024-12-31T00:00:00Z"),
+#                   fields = 'sea_surface_temperature',
+#                   fmt = "nc")
+
+# # copies file from temporary location to working directory
+# file.copy(from = crw_sst_monthly_nc$summary$filename,
+#           to = "sst_data/crw/crw_sst_monthly.nc",
+#           overwrite = TRUE)
+
+# create a raster from .nc file
+crw_raster_2005_2024 <- rast("sst_data/crw/crw_sst_monthly.nc") # use library(terra) instead of raster 
+print(crw_raster_2005_2024)
+
+# inspect by visualizing with basic plot
+# looks like import worked, but need to aggregate the layers next
+plot(crw_raster_2005_2024) 
+
+```
+
+The raster for SST from CRW was originally downloaded for a 20-year period (2005-2024). This allows for more smoothing of long-term averages; or for the raster to be split into two decadal time steps. However, since the RLS surveys with snake observations span from 2010-2024, I am opting to subset the original raster to allow for better temporal alignment with the survey dates while still capturing conditions over the span of more than a decade. 
+
+To better understand the effect of choosing a different temporal windows on my results, I could conduct a sensitivity analysis later in my analyses by comparing model outputs for two models using mean SST for each site calculated between 2005-2024 and 2010-2024. Additionally, I could produce maps showing change in SST between two layers to support this choice if the change between layers was zero or minimal in areas surveyed. 
+
+```{r subset CRW sst raster for survey years (2010-2024), fig.width=12, fig.height=8}
+
+# # required packages 
+# library(terra)
+
+# list dates for each layer in the raster
+crw_dates_2005_2024 <- as.Date(time(crw_raster_2005_2024))
+
+# subset: keep only dates from 2010–01–01 to 2024–12–31
+# code to facilitate subsetting below adapted from responses generated by ChatGPT (OpenAI, 2025)
+valid_idx <- which(crw_dates_2005_2024 >= as.Date("2010-01-01") & crw_dates_2005_2024 <= as.Date("2024-12-31"))
+crw_raster_2010_2024 <- crw_raster_2005_2024[[valid_idx]] # subset the raster
+crw_dates_2010_2024 <- crw_dates_2005_2024[valid_idx] # also subset the dates
+
+# extract month from each layer
+crw_raster_2010_2024 <- format(crw_dates_2010_2024, "%m")
+
+crw_raster_2010_2024 <- crw_raster_2005_2024[[valid_idx]] # subset the raster for desired layers
+crw_dates_2010_2024 <- crw_dates_2010_2024[valid_idx] # update the date vector
+
+# inspect by visualizing with basic plot
+plot(crw_raster_2010_2024) 
+
+```
+
+Now that CRW data layer has been downloaded and subset to align with RLS survey dates, can separate out each of the month layers from the raster file so that months/seasons can be visualized independently. 
+
+Once the raster is separated by months, need to convert into a data frame if visualizations are going to be created using ggplot.  
+
+```{r separate CRW monthly SST raster into individual months, create data frame and visualize, fig.width=12, fig.height=8}
+
+## required packages
+# library(dplyr)
+# library(tidyr)
+# library(ggplot2)
+# library(viridis)
+# library(terra)
+
+# list dates for each layer in the raster 
+crw_dates_2010_2024 <- as.Date(time(crw_raster_2010_2024))
+
+# extract month from each layer 
+crw_month_2010_2024 <- format(crw_dates_2010_2024, "%m")
+
+# create a loop to group the layers by month ("01" to "12") and calculate mean SST for that month for all years (2010-2024), creates 12 rasters
+# loop below was developed using code adapted from responses generated by ChatGPT (OpenAI, 2025)
+crw_sst_months_2010_2024 <- lapply(sprintf("%02d", 1:12), function(m) {
+  idx <- which(crw_month_2010_2024 == m) # find all layers for month
+  mean(crw_raster_2010_2024[[idx]], na.rm = TRUE)}) # calculate mean SST for month
+
+# combine 12 rasters generated above back into a single raster, so that each month has a layer
+crw_sst_2010_2024_merged <- rast(crw_sst_months_2010_2024)
+names(crw_sst_2010_2024_merged) <- month.name  # name layers by month
+
+# inspect by visualizing with basic plot, should generate plot for each month
+plot(crw_sst_2010_2024_merged)
+
+# convert to data frame 
+crw_sst_2010_2024_df <- as.data.frame(crw_sst_2010_2024_merged, xy = TRUE, na.rm = TRUE)  # uses "terra" to include spatial coordinates for raster cells (x/y coordinates)
+
+# pivot data frame to long format
+crw_sst_2010_2024_long <- crw_sst_2010_2024_df %>%
+  pivot_longer(cols = -c(x, y), names_to = "month", values_to = "sst")
+
+# re-order month factor for plotting
+crw_sst_2010_2024_long$month <- factor(crw_sst_2010_2024_long$month, levels = month.name)
+
+# create plot using ggplot, should see plot for each month
+ggplot(crw_sst_2010_2024_long, aes(x = x, y = y, fill = sst)) +
+  geom_raster() +
+  facet_wrap(~month, ncol = 4) +
+  scale_fill_viridis_c(option = "turbo", name = "SST (°C)") +
+  coord_fixed() +
+  labs(title = "Average monthly sea surface temperature (2010–2024)",
+       x = "Longitude",
+       y = "Latitude") +
+  theme_emw() +
+  theme(strip.background = element_blank(), # removes the text boxes that come from facet wrapping 
+    strip.text = element_text(face = "bold")) # bolds the month names
+
+```
+
+From the faceted maps above, warmer SST temperature appears to extend further towards the south during summer months (Jan, and Feb). During these months, the East Australian Current is more visually prominent and extends southwards.
+
+## Analysis Part IV
+### Extraction and visualizations of SST for RLS survey points 
+
+Now that RLS dataset and CRW SST layers are loaded and cleaned, I will next extract mean SST (2010-2024) for each RLS site where snakes detected based on CRW raster (using lat/long).
+
+```{r extract mean SST (2010-2024) for each RLS site where sea snakes observed (map), fig.width=12, fig.height=8}
+
+## required packages
+# library(dplyr)
+# library(terra)
+# library(ggplot2)
+# library(viridis)
+# library(rnaturalearth)
+# library(rnaturalearthdata)
+# library(sf)
+# library(stringr)
+
+# required data (should be pre-loaded from previous chunks)
+# RLS_snakes 
+# crw_sst_2010_2024_merged
+
+# convert survey lat/long into points
+survey_points <- vect(RLS_snakes, geom = c("longitude", "latitude"), crs = "EPSG:4326") # coordinate reference system taken from raster layer 
+
+# rename the layers in crw_sst_2010_2024_merged
+names(crw_sst_2010_2024_merged) <- paste0("sst_month_", 1:nlyr(crw_sst_2010_2024_merged))
+
+# extract SST at each dive locations across all months
+crw_sst_values_2010_2024 <- terra::extract(crw_sst_2010_2024_merged, survey_points) # one row per site with SST for each month
+
+crw_sst_values_2010_2024$site_code <- RLS_snakes$site_code
+# note that number of rows for crw_sst_values_2010_2024 is greater than number of unique site codes because I am using RLS_snakes which has multiple rows per site code (for each size class)
+
+# calculate mean SST for each site
+crw_mean_sst_site_2010_2024 <- crw_sst_values_2010_2024 %>%
+  group_by(site_code) %>%
+  summarise(mean_sst = mean(c_across(starts_with("sst_month_")), na.rm = TRUE),
+            .groups = "drop")
+
+crw_mean_sst_site_2010_2024 <- crw_mean_sst_site_2010_2024 %>%
+  left_join(RLS_snakes %>% 
+  dplyr::select(site_code, longitude, latitude), by = "site_code") %>%
+  distinct(site_code, .keep_all = TRUE) # gets rid of duplicated rows for sst that come from merging with RLS_snakes
+
+# visualize mean sst (2010-2024) at each RLS site where snakes observed
+ggplot() +
+  geom_sf(data = australia, fill = "gray95", color = "black", size = 0.3) +
+  geom_point(data = crw_mean_sst_site_2010_2024, 
+      aes(x = longitude, y = latitude, color = mean_sst), 
+      size = 3) +
+  scale_color_viridis_c(name = "Mean SST (°C)", option = "C") +
+  coord_sf(xlim = c(100, 165), ylim = c(-45, -5), expand = FALSE) +
+  theme_emw() +
+  labs(title = "Mean SST (2010–2024) at RLS sites with sea snakes",
+       x = "Longitude", y = "Latitude")
+
+```
+
+Now that mean SST has been calculated, I will briefly investigate the relationship between average sea surface temperature and sea snake abundance at each site by plotting prior to statistical analysis. 
+
+```{r bind sea snake abundance to crw_mean_sst_site and create simple visualization (plot), fig.width=12, fig.height=8}
+
+## required packages
+# library(dplyr)
+# library(ggplot)
+
+# modifies previous abund_per_dive dataframe to remove species_name grouping and calculate sea snake abundance at each site
+abund_per_survey <- RLS_snakes %>%
+  group_by(site_code, latitude, longitude) %>%
+  summarise(total_dives = n_distinct(survey_id), 
+            total_abund = sum(total), .groups = "drop") %>%
+  mutate(abundance_per_dive = total_abund / total_dives) 
+
+# join sea snake abundance per survey and mean sst together (note, this is the 15 year average from 2010-2024)
+# note: because some surveys were conducted many years prior to the end of this time step, a next step could be to look at sst in a period leading up more immediately to the survey date (e.g., mean sst in the month leading up the survey; explored in Appendix II) 
+abund_and_sst_2010_2024 <- abund_per_survey %>%
+  left_join(crw_mean_sst_site_2010_2024 %>% 
+  dplyr::select(site_code, mean_sst), by = "site_code")
+
+# # basic plot to visualize relationship between sst and sea snake abundance (NOT normalized to number of dives per site) - doesn't seem like a linear relationship
+# # abundance increases around 26°C, and again around 29-30°C
+# # commenting out because of known issues with more surveys = higher abundance
+# ggplot(abund_and_sst, aes(x = mean_sst, y = total_abund)) +
+#   geom_point() +
+#   labs(title = "Sea snake total abundance vs. mean SST",
+#        x = "Mean SST (°C)",
+#        y = "Sea snake abundance") +
+#   theme_emw()
+
+# abundance per dive vs. sst shows a different pattern
+# still an aggregation of points around 26°C
+# because there still doesn't appear to be a particularly linear relationship between SST and abundance (normalized by number of dives), I will be opting to use GAMs for modelling this relationship
+ggplot(abund_and_sst_2010_2024, aes(x = mean_sst, y = abundance_per_dive)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(title = "Sea snake abundance per dive vs. mean SST",
+       x = "Mean SST (°C)",
+       y = "Sea snake abundance") +
+  theme_emw()
+
+```
+
+While long-term mean SST gives a sense of the average conditions at a site, this metric does not capture extremes (e.g., coldest and warmest months, marine heat waves or cold snaps). It could be that sea snakes may expand into or retreat from certain areas seasonally with changes in SST. Since I am interested in limits on their southern distribution, I will focus here on mean winter SST as well as SST during the coldest month of the year.
+
+The following section group months to calculate mean winter_sst and min_monthly_sst from the CRW dataset. Both mean winter SST and minimum montly SST (in addition to overall mean SST) will be used during modelling as predictors for sea snake abundance. 
+
+```{r calculation of average winter_sst and min_montly_sst from CRW dataset}
+
+## required packages
+# library(tidyr)
+# library(dplyr)
+# library(ggplot2)
+
+# calculate average winter sst
+crw_sst_2010_2024_long <- crw_sst_values_2010_2024 %>%
+  pivot_longer(cols = starts_with("sst_month_"),
+               names_to = "month_label",
+               values_to = "sst") %>%
+  mutate(month = as.integer(str_extract(month_label, "[0-9]+"))) # extract numeric month from column name like "sst_month_1"
+
+# define winter as June (6), July (7), August (8)
+winter_sst_2010_2024_df <- crw_sst_2010_2024_long %>%
+  filter(month %in% c(6, 7, 8)) %>%
+  group_by(site_code) %>%
+  summarise(winter_sst = mean(sst, na.rm = TRUE), .groups = "drop")
+
+# join abundance and sst data frames (adds winter sst column to abundance df)
+abund_and_sst_2010_2024 <- abund_and_sst_2010_2024 %>%
+  left_join(winter_sst_2010_2024_df, by = "site_code")
+
+# can also consider minimum monthly sst (i.e., coldest month)
+coldest_sst_2010_2024 <- crw_sst_2010_2024_long %>%
+  group_by(site_code) %>%
+  summarise(min_monthly_sst = min(sst, na.rm = TRUE), .groups = "drop")
+
+# join abundance and sst data frames (adds min monthly sst column to abundance df)
+abund_and_sst_2010_2024 <- abund_and_sst_2010_2024 %>%
+  left_join(coldest_sst_2010_2024, by = "site_code")
+
+```
+
+## Analysis Part V
+### Statistical modelling 
+
+Something to consider prior to building final models is that sea snake observations were aggregated from 3 different survey types (m0, m1, m2). This was done to capture all observations of sea snakes within the broader RLS dataset. Despite the advantage of providing more data points, the differences in effort resulting from varying survey depths and block dimensions (e.g., m1 two 5x5 m bands parallel with 50 m transect; m2 two 1x2 m bands parallel with 50 m transect; https://reeflifesurvey.com/wp-content/uploads/2023/03/NEW-Methods-Manual_010223.pdf), potentially present challenges for analysis. 
+
+Differences in survey method could be dealt with by: 1) normalizing abundance according to survey effort (i.e., dimensions of bands; difficult for m0 off-transect observations), 2) analyzing subsets of the data in models (e.g., only m1 which has the most observations), or 3) accounting for method as a covariate in final abundance vs sst models. I will first use a modelling approach to evaluate the impact of survey method on sea snake counts, results from this step will guide which (if any) of these approaches to use. 
+
+```{r assess use of different survey method on abundance at each site using modelling approach, fig.show='hide'}
+
+## required packages
+
+# library(dplyr)
+# library(gggplot2)
+
+# identify sites that have more than 1 survey method applied (can only compare methods within the same site)
+multi_survey_sites <- RLS_snakes %>%
+  group_by(site_code) %>%
+  summarise(n_methods = n_distinct(method)) %>%
+  filter(n_methods > 1) %>%
+  pull(site_code) # list of sites where multiple methods were used
+
+# filter RLS dataset to only include sites where multiple survey methods used
+multi_survey_data<- RLS_snakes %>%
+  filter(site_code %in% multi_survey_sites)
+
+# calculate mean abundance for each method at each site
+summary_by_method <- multi_survey_data %>%
+  group_by(site_code, method) %>%
+  summarise(mean_abund = mean(total),
+            n_surveys = n(),
+            .groups = "drop")
+
+# rough plot of abundance differences by survey method
+# from this, it seems that survey methods mostly have abundance of 1 with some outliers
+ggplot(summary_by_method, aes(as.factor(x = method), y = mean_abund)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Snake abundance by survey type at multi-method sites",
+       y = "Mean Abundance per Dive", x = "Survey Type")
+
+# summarize overall abundance by method 
+# based on this, it average abundance between survey types is very similar
+abund_per_method <- multi_survey_data %>%
+  group_by(method) %>%
+  summarise(mean_abund = mean(total))
+print(abund_per_method)
+
+# check distribution of mean abundance across sites
+# did this to help guide choice of family for model
+hist(summary_by_method$mean_abund)
+
+# check and set data types for modelling
+str(summary_by_method)
+summary_by_method$method <- as.factor(summary_by_method$method)
+summary_by_method$site_code <- as.factor(summary_by_method$site_code)
+summary_by_method$n_surveys <- as.numeric(summary_by_method$n_surveys)
+
+# investigate differences in abundance by method using a modelling approach, with mean_abund as response and method as predictor (fixed effect) to test if abundance differs by method
+# incorporated site_code as a random effect (with a smoothing term) 
+# expect that sites will naturally differ in snake abundance for reasons unrelated to survey method
+# adding site_code as a random effect is a way for accounting for variability between sites
+# opted for a gamma distribution for this because mean abundance is continuous, positive, and right-skewed
+gam_gamma_method <- gam(mean_abund ~ method + s(site_code, bs = "re"), 
+                 data = summary_by_method,
+                 family = Gamma(link = "log"),
+                 weights = n_surveys) # included weight to give more influence to method avrgs calculated from more surveys
+
+summary(gam_gamma_method) 
+# method 1 and 2 have slightly lower abundances compared to method 0, but differences not statistically significant 
+# site_code random effect s(site_code) is significant, which indicates that differences between sites might be more important than differences between methods
+# overall, method has weak non-significant impact on abundance based on this model 
+
+gam.check(gam_gamma_method) # does not appear to be any major issues/patterns in response vs. fitted 
+plot(gam_gamma_method, residuals = TRUE) # some deviation on upper tail
+# overall fit acceptable
+# could also consider spatial autocorrelation (i.e., sites in same ecoregion expected to have more similar abundances than those in different ones)
+# this will not be explored further in the present analysis since abundances between regions were relatively equal between regions based on exploratory plots
+
+```
+
+From above, there is limited evidence to suggest that survey method is strongly influencing sea snake abundances. Based on the similar number of snakes detected on each survey type (from calculation of average abundance per method type, and boxplot), in addition to insignificance of model, I am opting to exclude method type from my further analyses.
+
+To model the relationship between sea snake abundance and SSTs (overall mean, winter, and minimum monthly), I opted to use GAMs because of the suspected non-linear relationship between predictor (SST) and response (abundance) variables. Because of issues relating to unequal dive effort between sites and regions, will be using sea snake abundance per dive rather than overall abundance at each site. Another way to account for unequal effort between sites from a modelling perspective is by including an offset for the number of dives per site. This approach was attempted but exuded herein due to poor fit of the model overall. 
+
+```{r use package "mgcv" to fit basic GAM for sea snake abundance (per dive) vs mean SST, fig.show='hide'}
+
+## required packages
+# library(mgcv)
+
+# quickly check distribution of data 
+hist(abund_and_sst_2010_2024$abundance_per_dive)
+# shows a right skew in sea snake counts
+
+# because of right skew, check mean and abundance
+mean_abund <- mean(abund_and_sst_2010_2024$abundance_per_dive) # 1.60764
+var_abund <- var(abund_and_sst_2010_2024$abundance_per_dive) # 0.60509
+
+# build simple GAM
+gam_gamma_simple <- gam(abundance_per_dive ~ s(mean_sst),
+                 data = abund_and_sst_2010_2024,
+                 family = Gamma(link = "log"))
+
+summary(gam_gamma_simple) # check model summary
+plot(gam_gamma_simple, residuals = TRUE, pch = 1) # plot GAM
+gam.check(gam_gamma_simple) # diagnostics plot 
+
+# can also set up basic GAM for winter sst and minimum monthly sst
+
+# for winter sst
+gam_gamma_simple_winter <- gam(abundance_per_dive ~ s(winter_sst),
+                 data = abund_and_sst_2010_2024,
+                 family = Gamma(link = "log"))
+
+summary(gam_gamma_simple_winter)
+plot(gam_gamma_simple_winter, residuals = TRUE, pch = 1)
+gam.check(gam_gamma_simple_winter) 
+
+# and for minimum monthly sst
+gam_gamma_simple_coldest <- gam(abundance_per_dive ~ s(min_monthly_sst),
+                 data = abund_and_sst_2010_2024,
+                 family = Gamma(link = "log"))
+
+summary(gam_gamma_simple_coldest)
+plot(gam_gamma_simple_coldest, residuals = TRUE, pch = 1)
+gam.check(gam_gamma_simple_coldest) 
+
+# all AIC scores approximately equal, and none of the GAMs using sst explain much of the variation in abundance of snakes per dive
+AIC(gam_gamma_simple, gam_gamma_simple_winter, gam_gamma_simple_coldest)
+
+```
+
+Because I expect sites to inherently differ from one another in ways other than SST, site_code will next be incorporated into the basic GAM. 
+
+```{r build on basic GAM to add site as random effect, fig.show='hide'}
+
+## required packages
+# library(mgcv)
+
+# quickly check distribution of data 
+hist(abund_and_sst_2010_2024$abundance_per_dive)
+# shows a right skew in sea snake counts
+
+# because of right skew, check mean and abundance
+mean_abund <- mean(abund_and_sst_2010_2024$abundance_per_dive) # 1.60764
+var_abund <- var(abund_and_sst_2010_2024$abundance_per_dive) # 0.60509
+
+abund_and_sst_2010_2024$site_code <- as.factor(abund_and_sst_2010_2024$site_code) # convert site code to factor for model
+
+# build on basic GAM to add site as random effect 
+gam_gamma_site <- gam(abundance_per_dive ~ s(mean_sst) + s(site_code, bs = "re"), # adds site as random effect using smooth (each site given random intercept)
+                 data = abund_and_sst_2010_2024,
+                 family = Gamma(link = "log"))
+
+summary(gam_gamma_site) # check model summary
+plot(gam_gamma_site, residuals = TRUE, pch = 1) # plot GAM
+gam.check(gam_gamma_site) # diagnostics plot 
+
+# what I am generally interpreting from this is that sst (mean or winter) alone is not a strong predictor of sea snake abundance after accounting for variation between sites (p = 0.613)
+# once site_code was added as a random effect, deviance explained was much higher 
+# differences among sites were significant (p = 0.018)
+
+# repeat for winter winter sst with site included as random effect
+gam_gamma_winter_site <- gam(abundance_per_dive ~ s(winter_sst) + s(site_code, bs = "re"), # adds site as random effect 
+                 data = abund_and_sst_2010_2024,
+                 family = Gamma(link = "log"))
+
+summary(gam_gamma_winter_site)
+plot(gam_gamma_winter_site, residuals = TRUE, pch = 1)
+gam.check(gam_gamma_winter_site) 
+
+# and for minimum monthly sst
+gam_gamma_coldest_site <- gam(abundance_per_dive ~ s(min_monthly_sst) + s(site_code, bs = "re"), # adds site as random effect 
+                 data = abund_and_sst_2010_2024,
+                 family = Gamma(link = "log"))
+
+summary(gam_gamma_coldest_site)
+plot(gam_gamma_coldest_site, residuals = TRUE, pch = 1)
+gam.check(gam_gamma_coldest_site) 
+
+# all AIC scores approximately equal
+# the GAM including minimum monthly sst has lowest AIC, but not by a meaningful margin
+# overall, between site variation more important for explaining differences in abundance than to SST
+AIC(gam_gamma_site, gam_gamma_winter_site, gam_gamma_coldest_site)
+
+# an important caveat of my current approach which I now recognize as a limitation is that adding a random effect for site treats each of my sites as though they are independent
+# but since some sites are closer together than others (e.g., within the same ecoregion), then I'd expect that they'd be more similar than sites farther apart
+# in my present models, I have not included spatial auto-correlation, which accounts for sites being closer together being more similar than distant ones
+# to account for spatial proximity of sites in future I would add a smooth for latitude and longitude instead of site s(longitude, latitude) rather than accounting for site alone 
+
+```
+
+Note: I did not ultimately conduct a sensitivity analysis evaluating the use of different timesteps (i.e., 2005-2024 vs 2010-2024) on my models because the models constructed did not indicate that SST strongly explained variation in sea snake abundances.
+
+Overall, I did not find evidence to support that SST (overall mean SST, mean winter SST, or minimum monthly SST between 2010-2024) strongly influenced sea snake abundance. The absence of an observed relationship between SST and sea snake abundance could be influenced by several factors. 
+
+The first is that by using a normalized metric (sea snake abundance per dive) meant that in many cases there was little variation between sites since normalized abundance was often equal to 1, which was apparent in exploratory maps in Section II. Similar normalized abundances between sites likely translated to difficulties detecting and attributing differences in abundance between sites to SST. Additionally, the figure just preceding Section V, showing sea snake abundance per dive vs. mean SST, showed two aggregations of points around 26°C and 30°C, with data points outside of these two temperature bands. This lack of coverage across the full SST gradient may have further limited the ability of models to detect a meaningful relationship between SST and sea snake abundance. 
+
+Despite evidence that sea surface temperatures significantly influence sea snake abundance and distribution at a global scale (Heatwole et al., 2012), the present analysis evaluated a subset of sea snake data largely within known thermal tolerances for the group (Dunson & Ehlert, 1971). Reliable species presence–absence data would therefore be valuable for identifying realized thermal niche boundaries in regions with SSTs beyond these proposed limits.
+Future analyses could also compare sea snake abundances more broadly across the Indo-Pacific region, as the subset included in this study likely represents the southern extent of sea snake distribution (Dunson, 1975). Expanding the spatial resolution to incorporate the warmer waters around Indonesia, and potentially more variable sea snake abundance counts, may allow for a more thorough investigation of SST effects on sea snake abundance and distribution.
+
+Aside from temperature, site characteristics such as habitat type, prey abundance, or other environmental variables (e.g., salinity) may also drive differences in sea snake abundance within regions falling within their thermal tolerance limits (Patró n-Rivero et al., 2024). This is supported by the aggregation of observations in certain areas surveyed (e.g., the Coral Sea and Ashmore Reef). Interestingly, data exploration of abundance by latitude (immediately prior to Section III) revealed an absence of sea snake observations in latitude bands -16°S and -17°S, despite numerous surveys being conducted in this region. Future analyses could evaluate differences in habitat type and prey biomass between these latitudes and others within Australian waters to better understand potential drivers of sea snake presence, absence, and abundance. 
+
+## References 
+
+Assis, J., Fernández Bejarano, S. J., Salazar, V. W., Schepers, L., Gouvêa, L., Fragkopoulou, E., Leclercq, F., Vanhoorne, B., Tyberghein, L., Serrão, E. A., Verbruggen, H., & De Clerck, O. (2024). Bio-ORACLE v3.0: Pushing marine data layers to the CMIP6 Earth system models of climate change research. Global Ecology and Biogeography. https://doi.org/10.1111/geb.13813
+
+Assis, J., Tyberghein, L., Bosch, S., Verbruggen, H., Serrão, E. A., & De Clerck, O. (2018). Bio-ORACLE v2.0: Extending marine data layers for bioclimatic modelling. Global Ecology and Biogeography, 27(3), 277–284. https://doi.org/10.1111/geb.12693
+
+Dunson, W. A. (Ed.). (1975). The Biology of Sea Snakes (1st ed.). University Park Press.
+
+Dunson, W. A., & Ehlert, G. W. (1971). Effects of temperature, salinity, and surface water flow on distribution of the sea snake Pelamis. Limnology and Oceanography, 16(6), 845–853. https://doi.org/10.4319/LO.1971.16.6.0845
+
+Favilla, A. B., & Costa, D. P. (2020). Thermoregulatory strategies of diving air-breathing marine vertebrates: a review. Frontiers in Ecology and Evolution, 8, 555509. https://doi.org/10.3389/fevo.2020.555509
+
+Hamann, M., Limpus, C. J., & Read, M. A. (2007). Vulnerability of marine reptiles in the Great Barrier Reef to climate change. In Climate Change and the Great Barrier Reef: A Vulnerability Assessment (Issue July, pp. 97–120). The Great Barrier Reef Marine Park Authority. https://elibrary.gbrmpa.gov.au/handle/11017/547
+
+Heatwole, H., Grech, A., Monahan, J. F., King, S., & Marsh, H. (2012). Thermal biology of sea snakes and sea kraits. Integrative and Comparative Biology, 52, 257–273.
+
+NOAA Coral Reef Watch. (2024). Daily global 5km satellite sea surface temperature data [Data set]. NOAA National Environmental Satellite, Data, and Information Service (NESDIS). https://coralreefwatch.noaa.gov/
+
+OpenAI. (2024). ChatGPT (April 25 version) [Large language model]. https://chat.openai.com/
+
+Patró n-Rivero, C. I., Osorio-Olvera, L., Rojas-Soto, O. I., Chiappa-Carrara, X. I., Villalobos, F. I., Bessesen, B., López-Reyes, K. I., & Yañez-Arenas, C. (2024). Global analysis of the influence of environmental variables to explain ecological niches and realized thermal niche boundaries of sea snakes. PLOS ONE. https://doi.org/10.1371/journal.pone.0310456
+
+Pedersen, E. J., Miller, D. L., Simpson, G. L., & Ross, N. (2019). Hierarchical generalized additive models in ecology: An introduction with mgcv. PeerJ, 7, e6876. https://doi.org/10.7717/peerj.6876
+
+Reef Life Survey. (2024). RLS dataset of global reef fish and invertebrate surveys, version 2024 [Data set]. https://reeflifesurvey.com/
+
+Reef Life Survey. (2023). Standardised survey procedures for monitoring rocky & coral reef ecological communities. https://reeflifesurvey.com/wp-content/uploads/2023/03/NEW-Methods-Manual_010223.pdf
+
+Shine, R. (2005). Life-history evolution in reptiles. Annual Review of Ecology, Evolution, and Systematics, 36, 23–46. https://doi.org/10.1146/annurev.ecolsys.36.102003.152631
+
+Spalding, M. D., Fox, H. E., Allen, G. R., Davidson, N., Ferdaña, Z. A., Finlayson, M. A. X., Halpern, B. S., Jorge, M. A., Lombana, A. L., Lourie, S. A., 
+
+Martin, K. D., McManus, E., Molnar, J., Recchia, C. A., & Robertson, J. (2007). Marine ecoregions of the world: a bioregionalization of coastal and shelf areas. BioScience, 57(7), 573–583. https://doi.org/10.1641/B570707
+
+Stuart-Smith, R. D., Edgar, G. J., & Bates, A. E. (2017). Thermal limits to the geographic distributions of shallow-water marine species. Nature Ecology & Evolution, 1(12), 1846–1852. https://doi.org/10.1038/s41559-017-0353-x
+
+Tittensor, D. P., Mora, C., Jetz, W., Lotze, H. K., Ricard, D., Berghe, E. V., & Worm, B. (2010). Global patterns and predictors of marine biodiversity across taxa. Nature, 466(7310), 1098–1101. https://doi.org/10.1038/nature09329
+
+Udyawer, V., Barnes, P., Bonnet, X., Brischoux, F., Crowe-Riddell, J. M., D’Anastasi, B., Fry, B. G., Gillett, A., Goiran, C., Guinea, M. L., Heatwole, H., 
+
+Heupel, M. R., Hourston, M., Kangas, M., Kendrick, A., Koefoed, I., Lillywhite, H. B., Lobo, A. S., Lukoschek, V., … Voris, H. K. (2018). Future directions in the research and management of marine snakes. Frontiers in Marine Science, 5, 399. https://doi.org/10.3389/fmars.2018.00399
+
+### Package References 
+
+dplyr Wickham, H., François, R., Henry, L., Müller, K., & Vaughan, D. (2023). dplyr: A Grammar of Data Manipulation (R package version 1.1.4). Retrieved from https://dplyr.tidyverse.org
+
+tidyr Wickham, H., Vaughan, D., & Girlich, M. (2024). tidyr: Tidy Messy Data (R package version 1.3.1). Retrieved from https://tidyr.tidyverse.org
+
+lubridate Grolemund, G., & Wickham, H. (2011). Dates and times made easy with lubridate. Journal of Statistical Software, 40(3), 1–25. Retrieved from https://www.jstatsoft.org/v40/i03/
+
+stringr Wickham, H. (2023). stringr: Simple, Consistent Wrappers for Common String Operations (R package version 1.5.1). Retrieved from https://stringr.tidyverse.org
+
+ggplot2 Wickham, H. (2016). ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York. Retrieved from https://ggplot2.tidyverse.org
+
+viridis Garnier, S., Ross, N., Rudis, R., Camargo, A. P., Sciaini, M., & Scherer, C. (2024). viridis(Lite) - Colorblind-Friendly Color Maps for R (R package version 0.6.5). https://doi.org/10.5281/zenodo.4679423
+
+biooracler Fernandez, S. (2025). biooracler: Import environmental ocean data from Bio-Oracle via ERDDAP (R package version 0.0.0.9000, commit 218bffcadbf1acb1489b1f7a44ded58a30277757). Retrieved from https://github.com/bio-oracle/biooracler
+
+rerddap Chamberlain, S. (2025). rerddap: General Purpose Client for ‘ERDDAP™’ Servers (R package version 1.2.1). Retrieved from https://docs.ropensci.org/rerddap/
+
+maps Becker, R. A., Wilks, A. R., Brownrigg, R., Minka, T. P., & Deckmyn, A. (2024). maps: Draw Geographical Maps (R package version 3.4.2.1).
+
+sf Pebesma, E., & Bivand, R. (2023). Spatial Data Science: With Applications in R. Chapman and Hall/CRC. https://doi.org/10.1201/9780429459016
+Pebesma, E. (2018). Simple features for R: Standardized support for spatial vector data. The R Journal, 10(1), 439–446. https://doi.org/10.32614/RJ-2018-009
+
+terra Hijmans, R. (2025). terra: Spatial Data Analysis (R package version 1.8-42). Retrieved from https://rspatial.org/
+
+raster Hijmans, R. (2025). raster: Geographic Data Analysis and Modeling (R package version 3.6-32). Retrieved from https://rspatial.org/raster
+
+metR Campitelli, E. (2021). metR: Tools for Easier Analysis of Meteorological Fields (R package version 0.18.0). https://doi.org/10.5281/zenodo.2593516
+
+rnaturalearth Massicotte, P., & South, A. (2023). rnaturalearth: World Map Data from Natural Earth (R package version 1.0.1). Retrieved from https://docs.ropensci.org/rnaturalearth/
+
+rnaturalearthdata South, A., Michael, S., & Massicotte, P. (2024). rnaturalearthdata: World Vector Map Data from Natural Earth Used in ‘rnaturalearth’ (R package version 1.0.0). Retrieved from https://docs.ropensci.org/rnaturalearthdata/
+
+mgcv Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 73(1), 3–36.
+Wood, S. N., Pya, N., & Sáfken, B. (2016). Smoothing parameter and model selection for general smooth models (with discussion). Journal of the American Statistical Association, 111, 1548–1575.
+Wood, S. N. (2004). Stable and efficient multiple smoothing parameter estimation for generalized additive models. Journal of the American Statistical Association, 99, 673–686.
+Wood, S. N. (2017). Generalized Additive Models: An Introduction with R (2nd ed.). Chapman and Hall/CRC.
+Wood, S. N. (2003). Thin-plate regression splines. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 65(1), 95–114.
+
+## Appendix 
+
+### I: Bio-ORACLE SST layer integration and visualization 
+
+This will first be done using Bio-Oracle v2.2 data layers. An initial download attempt using v3.0 (which include two decadal time steps: 2000-2009 and 2010-2019) was made; however the file was not importing to R correctly.
+
+_v3.0 Assis, J., Fernández Bejarano, S.J., Salazar, V.W., Schepers, L., Gouvêa, L., Fragkopoulou, E., Leclercq, F., Vanhoorne, B., Tyberghein, L., Serrão, E.A., Verbruggen, H., De Clerck, O. (2024) Bio-ORACLE v3.0. Pushing marine data layers to the CMIP6 Earth system models of climate change research. Global Ecology and Biogeography. DOI: 10.1111/geb.13813_
+
+_v1.0 Tyberghein L, Verbruggen H, Pauly K, Troupin C, Mineur F, De Clerck O (2012) Bio-ORACLE: A global environmental dataset for marine species distribution modelling. Global Ecology and Biogeography, 21, 272–281. DOI: 10.1111/j.1466-8238.2011.00656.x)_
+
+The following code chunk was adapted from https://bscheng.com/2016/10/22/spatial-data-using-raster-in-r/ to create a raster of Bio-Oracle annual average SST (v2.2; 2000-2014).   
+
+```{r pre-download bio-ORACLE data layers to working directly and import (maps)}
+
+## required packages
+# library(raster)
+
+bio_oracle_mean_sst <- raster("sst_data/bio_oracle/mean_sst.asc")
+bio_oracle_mean_sst
+
+## visualize in base r
+# plot(bio_oracle_mean_sst, main="SST") # plot raster
+# 
+# plot(bio_oracle_mean_sst,
+#      main = "SST",
+#      col = viridis(255, option = "C"), # 255-color viridis palette
+#      legend.args = list(text = 'Degrees C', side = 4, font = 2, line = 2.5, cex = 0.8))
+# 
+# plot(bio_oracle_mean_sst,
+#      main = "Australia",
+#      col = viridis(255, option = "C"),
+#      legend.args=list(text='Degrees C', side=4,font=2, line=2.5, cex=0.8), xlim=c(100,165),ylim=c(-45,-5))
+
+# convert raster to data frame (for ggplot)
+bio_oracle_mean_sst_df <- as.data.frame(bio_oracle_mean_sst, xy = TRUE, na.rm = TRUE)
+
+# plot average sea surface temperature (for 2000-2014) with ggplot
+ggplot() +
+  geom_raster(data = bio_oracle_mean_sst_df, aes(x = x, y = y, fill = mean_sst)) +
+  scale_fill_viridis_c(option = "turbo", 
+      direction = -1,
+      name = "Degrees °C") +
+  coord_cartesian(xlim = c(100, 165), ylim = c(-45, -5), expand = FALSE) +
+  theme_emw() +
+  labs(title = "Average sea surface temperature 2000-2014",
+       x = NULL,
+       y = NULL,
+       legend.title = element_text(margin = margin(b = 10)))
+
+# plot average sea surface temperature (for 2000-2014) with ggplot, include contours for sst
+# clear from contour lines that warmer sst extend further southwards around the edges of Australia
+# reflects warm boundary currents (CITE)
+    # on the eastern side: East Australia Current (transports water from Coral Sea towards NSW)
+    # on the western side: Leeuwin Current (begins at North West Cape)
+ggplot() +
+  geom_raster(data = bio_oracle_mean_sst_df, aes(x = x, y = y, fill = mean_sst)) +
+  geom_contour(data = bio_oracle_mean_sst_df, # includes contour lines
+      aes(x = x, y = y, z = mean_sst),
+      color = "white", 
+      linewidth = 0.4, 
+      breaks = seq(10, 30, by = 2)) + # contour line every 2 degrees 
+  geom_text_contour(data = bio_oracle_mean_sst_df, aes(x = x, y = y, z = mean_sst), # adds labels for contour lines
+      breaks = seq(10, 30, by = 1),
+      size = 5, stroke = 0.3, color = "black",
+      skip = 0,
+      rotate = FALSE,
+      label.placer = label_placer_flattest()) +
+  theme_emw() +
+  scale_fill_viridis_c(option = "turbo", 
+      direction = -1, 
+      name = "Degrees °C") +
+  coord_cartesian(xlim = c(100, 165), ylim = c(-45, -5), expand = FALSE) +
+  labs(title = "Average sea surface temperature 2000-2014",
+       x = NULL,
+       y = NULL) 
+
+
+```
+
+Can also use "biooracler" package to directly load in Bio-ORACLE layers into R. This approach allowed me to properly download v3.0 data layers (which has two decadal time steps: 2000-2009 and 2010-2019)
+
+The following code chunk was guided by documentation from: https://github.com/bio-oracle/biooracler?tab=readme-ov-file 
+
+```{r use "biooracler" to download bio-ORACLE data layers}
+
+# install.packages("devtools")
+# devtools::install_github("bio-oracle/biooracler")
+
+## required packages 
+# library(biooracler)
+# library(raster)
+
+# searches and lists layers from Bio-ORACLE using keyword search
+list_layers("ocean temperature") # the dataset ID for sst baseline is: "thetao_baseline_2000_2019_depthsurf"
+
+# layer information
+info_layer("thetao_baseline_2000_2019_depthsurf") # confirm variables, units, coverage etc.
+
+# define dataset to download, set constraints and variables
+download_layers(
+  dataset_id = "thetao_baseline_2000_2019_depthsurf", # define dataset to download
+  variables = "thetao_mean", # mean temp
+  constraints = list(
+    time = c("2000-01-01T00:00:00Z", "2010-01-01T00:00:00Z"), # downloads both time steps/layers (mean of 2000s and 2010s)
+    latitude = c(-45, -5),  # constrain to australia
+    longitude = c(105, 165)), # constrain to australia
+    fmt = "raster", # file type
+    directory = "sst_data/bio_oracle") # where the file is stored when downloaded 
+# the file is now downloaded and stored in sub-folder of the wd, note download saved as .nc file 
+
+# searches for file in sst_data folder within wd 
+biooracle_files <- list.files("sst_data/bio_oracle/", pattern = "\\.tif$|\\.nc$", full.names = TRUE)
+
+# create raster from .nc file  
+biooracle_raster <- raster(biooracle_files)
+print(biooracle_raster)
+
+# inspect by visualizing with basic plot 
+plot(biooracle_raster)
+# at this point, can have similar workflow to above for ggplot
+# first, convert to data frame for ggplot to read
+# then visualize with ggplot
+
+```
+
+### II: Monthly average SST in month leading up to survey
+
+Note: This section calculates month prior to survey based on survey month to give a more temporally precise estimate of SST that sea snakes would be experiencing in the time leading up to a survey being conducted at that site. Because this calculation is based on survey month only, it does not account for survey day within the month - and therefore is better suited to estimating temperature in month prior for surveys conducted nearer the start vs the end of the next month. Once calculated, this predictor was also included in a series of GAMs that were excluded on the basis of poor model fit. 
+
+```{r calculate monthly average sst in the month prior to survey}
+# 
+# ## required packages 
+# # library(dplyr)
+# # library(tidyr)
+# 
+# abund_survey_id <- RLS_snakes %>%
+#   group_by(site_code, survey_id, latitude, longitude, month, year) %>%
+#   summarise(total_abundance = sum(total, na.rm = TRUE), .groups = "drop")
+# 
+# abund_survey_id <- abund_survey_id %>%
+#   mutate(prior_month = if_else(month == 1, 12, month - 1),
+#     prior_month_year  = if_else(month == 1, year - 1, year)) # handles January where previous month would be in previous year
+# 
+# time(crw_raster_2010_2024)
+# names(crw_raster_2010_2024) <- paste0("sst_", format(crw_dates_2010_2024, "%Y_%m"))
+# 
+# # convert to df 
+# crw_mmyy_df <- as.data.frame(crw_raster_2010_2024, xy = TRUE, na.rm = TRUE)
+# 
+# crw_mmyy_df_long <- crw_mmyy_df %>%
+#   pivot_longer(cols = starts_with("sst_"), names_to = "layer", values_to = "sst") %>%
+#   mutate(layer_date = gsub("sst_", "", layer), # remove sst prefix
+#          year = as.integer(substr(layer_date, 1, 4)), # extract year (chr 1-4)
+#          month = as.integer(substr(layer_date, 6, 7))) %>% # extract month (chr 6-7)
+#   dplyr::select(x, y, year, month, sst)
+# 
+# head(crw_mmyy_df_long)
+# 
+# site_points <- vect(abund_survey_id, geom = c("longitude", "latitude"), crs = "EPSG:4326")
+# sst_extracted_mmyy <- terra::extract(crw_raster_2010_2024, site_points, ID = FALSE)
+# 
+# bind_abund_sst <- bind_cols(abund_survey_id, sst_extracted_mmyy)
+# 
+# bind_abund_sst_long <- bind_abund_sst %>%
+#   pivot_longer(cols = starts_with("sst_"), names_to = "layer", values_to = "sst") %>%
+#   mutate(layer_date = gsub("sst_", "", layer),
+#          year = as.integer(substr(layer_date, 1, 4)),
+#          month = as.integer(substr(layer_date, 6, 7))) %>%
+#   dplyr::select(site_code, survey_id, latitude, longitude, month, year, prior_month, prior_month_year, sst, total_abundance)
+# 
+# abund_sst_matched <- bind_abund_sst_long %>%
+#   filter(month == prior_month, year == prior_month_year)
+
+
+```
+
+
